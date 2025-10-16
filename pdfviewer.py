@@ -21,7 +21,9 @@ class PDFViewer(QMainWindow):
         self.anchor_path = self._make_anchor_filename(pdf_path)
         self.doc = fitz.open(pdf_path)
 
-        self.zoom = 1.0
+        self.base_pdf_scale = 2.0     # the scale used to generate base_image
+        self.user_scale = 1.0         # the zoom factor the UI controls
+        self.current_render_scale = self.base_pdf_scale * self.user_scale
         self.fit_to_width = True
         self.performance_mode = False
         self.anchors = []
@@ -49,6 +51,10 @@ class PDFViewer(QMainWindow):
         act_fit = QAction(QIcon(), "Fit Width", self)
         act_fit.triggered.connect(self.reset_zoom)
         self.toolbar.addAction(act_fit)
+
+        # Render zoom cache
+        self.render_cache = {}
+
 
         # Timer for smooth scroll
         self.timer = QTimer()
@@ -95,18 +101,79 @@ class PDFViewer(QMainWindow):
 
         return long_image
 
+    def render_pdf_scaled(self, doc, render_scale):
+        """Render all pages into one tall QImage at the given MuPDF render_scale."""
+        mat = fitz.Matrix(render_scale, render_scale)
+        images = []
+        widths, heights = [], []
+
+        for page in doc:
+            pix = page.get_pixmap(matrix=mat)
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+            images.append(img.copy())
+            widths.append(pix.width)
+            heights.append(pix.height)
+
+        total_height = sum(heights)
+        total_width = max(widths)
+        long_image = QImage(total_width, total_height, QImage.Format_RGB888)
+        long_image.fill(Qt.white)
+
+        painter = QPainter(long_image)
+        y_offset = 0
+        for img in images:
+            painter.drawImage(0, y_offset, img)
+            y_offset += img.height()
+        painter.end()
+
+        return long_image
+
+
     # ---------- Scaling and Updating ----------
     def update_scaled_image(self):
-        """Apply zoom or fit-to-width scaling."""
+        """
+        Re-render PDF at current zoom or fit-to-width, keeping the *top line* fixed.
+        Uses explicit render scales to avoid confusion between 'zoom' semantics.
+        """
+        sb = self.scroll_area.verticalScrollBar()
+
+        # current render scale (pixels-per-PDF-unit) used to display the current image
+        old_render_scale = getattr(self, "current_render_scale", self.base_pdf_scale * self.user_scale)
+
+        # 1) Compute absolute PDF Y coordinate currently at the top of the viewport
+        y_top_scaled = sb.value()               # top of viewport, in *pixels of current image*
+        y_top_pdf = y_top_scaled / old_render_scale if old_render_scale != 0 else 0.0
+
+        # 2) Update user_scale if fit-to-width requested
         if self.fit_to_width:
             target_width = self.scroll_area.viewport().width()
-            self.zoom = target_width / self.base_image.width()
-        scaled_width = int(self.base_image.width() * self.zoom)
-        scaled_height = int(self.base_image.height() * self.zoom)
-        self.image = self.base_image.scaled(
-            scaled_width, scaled_height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
-        )
+            # base_image.width() equals (pdf_width * base_pdf_scale)
+            # user_scale should be ratio of target_width to base_image width
+            self.user_scale = target_width / max(1, self.base_image.width())
+
+        # 3) Compute new render scale and re-render
+        new_render_scale = self.base_pdf_scale * self.user_scale
+        self.current_render_scale = new_render_scale
+        print(f"Re-rendering PDF at render_scale={new_render_scale:.3f} (user_scale={self.user_scale:.3f})")
+        self.image = self.render_pdf_scaled(self.doc, new_render_scale)
         self.update_pixmap()
+
+        # 4) After layout settles, restore the vertical scroll so the same PDF Y is at the top.
+        # Use singleShot to ensure scroll ranges updated. Clamp to scrollbar range.
+        def _restore():
+            QApplication.processEvents()   # give Qt a chance to update layout and scrollbar ranges
+            sb2 = self.scroll_area.verticalScrollBar()
+            target_scaled = int(round(y_top_pdf * self.current_render_scale))
+            # clamp to valid range
+            target_scaled = max(0, min(target_scaled, sb2.maximum()))
+            sb2.setValue(target_scaled)
+        QTimer.singleShot(0, _restore)
+
+    def _restore_top_position(self, y_top_base):
+        """Scroll so that the same document Y position stays at top."""
+        sb = self.scroll_area.verticalScrollBar()
+        target_y_scaled = int(y_top_base * self.zoom)
+        sb.setValue(target_y_scaled)
 
     def update_pixmap(self):
         """Redraw anchors on top of scaled image and refresh immediately."""
@@ -118,7 +185,7 @@ class PDFViewer(QMainWindow):
             pen = QPen(Qt.red, 3)
             painter.setPen(pen)
             for y in self.anchors:
-                painter.drawLine(0, int(y * self.zoom), pixmap.width(), int(y * self.zoom))
+                painter.drawLine(0, int(y * self.user_scale), pixmap.width(), int(y * self.user_scale))
 
         painter.end()
         self.label.setPixmap(pixmap)
@@ -126,7 +193,6 @@ class PDFViewer(QMainWindow):
         self.label.update()
         self.scroll_area.viewport().update()
         QApplication.processEvents()
-
 
 
 
@@ -143,7 +209,7 @@ class PDFViewer(QMainWindow):
         so don't add the scrollbar value again.
         """
         # y_click is already relative to the full label (scaled) coordinates
-        y_abs = y_click / self.zoom  # convert back to base-image coords
+        y_abs = y_click / self.user_scale  # convert back to base-image coords
         # clamp just in case
         y_abs = max(0, min(self.base_image.height() - 1, y_abs))
         self.anchors.append(y_abs)
@@ -155,7 +221,7 @@ class PDFViewer(QMainWindow):
         """Remove the anchor nearest to the clicked Y position (converted from scaled coords)."""
         if not self.anchors:
             return
-        y_abs = y_click / self.zoom
+        y_abs = y_click / self.user_scale
         nearest = min(self.anchors, key=lambda a: abs(a - y_abs))
         self.anchors.remove(nearest)
         print(f"Removed anchor near base-y={y_abs:.1f} (actual {nearest:.1f})")
@@ -173,6 +239,10 @@ class PDFViewer(QMainWindow):
                 self.next_anchor()
             elif key == Qt.Key_Left:
                 self.prev_anchor()
+            elif key == Qt.Key_Plus or key == Qt.Key_Equal:
+                self.zoom_in()
+            elif key == Qt.Key_Minus:
+                self.zoom_out()
             return
 
         # --- Normal mode controls ---
@@ -180,6 +250,10 @@ class PDFViewer(QMainWindow):
             self.save_anchors()
         elif key == Qt.Key_L:
             self.load_anchors()
+        elif key == Qt.Key_Right:
+            self.next_anchor()
+        elif key == Qt.Key_Left:
+            self.prev_anchor()
         elif key == Qt.Key_Plus or key == Qt.Key_Equal:
             self.zoom_in()
         elif key == Qt.Key_Minus:
@@ -197,7 +271,7 @@ class PDFViewer(QMainWindow):
 
         sb = self.scroll_area.verticalScrollBar()
         y_top_scaled = sb.value()  # top of the viewport in scaled coordinates
-        y_abs = y_top_scaled / self.zoom  # convert to base-image coordinate
+        y_abs = y_top_scaled / self.user_scale  # convert to base-image coordinate
         self.anchors.append(y_abs)
         self.anchors = sorted(list(set(self.anchors)))
         print(f"Added anchor at top of view (base-y={y_abs:.1f})")
@@ -224,7 +298,7 @@ class PDFViewer(QMainWindow):
         self.scroll_to_anchor(self.current_anchor_index)
 
     def scroll_to_anchor(self, index):
-        target_y = int(self.anchors[index] * self.zoom)
+        target_y = int(self.anchors[index] * self.user_scale)
         sb = self.scroll_area.verticalScrollBar()
         self.start_y = sb.value()
         self.target_y = min(max(0, target_y), sb.maximum())
@@ -236,7 +310,7 @@ class PDFViewer(QMainWindow):
         self.speed = (self.target_y - self.start_y) / frames
 
         self.timer.start(int(interval))
-        print(f"Scrolling quickly to anchor {index}: {target_y/self.zoom:.1f} (zoom={self.zoom:.2f})")
+        print(f"Scrolling quickly to anchor {index}: {target_y/self.user_scale:.1f} (zoom={self.user_scale:.2f})")
 
     def smooth_scroll(self):
         sb = self.scroll_area.verticalScrollBar()
@@ -250,19 +324,20 @@ class PDFViewer(QMainWindow):
     # ---------- Zoom ----------
     def zoom_in(self):
         self.fit_to_width = False
-        self.zoom *= 1.25
-        print(f"Zoom In → {self.zoom:.2f}")
+        self.user_scale *= 1.85
+        print(f"Zoom In → user_scale={self.user_scale:.3f}")
         self.update_scaled_image()
 
     def zoom_out(self):
         self.fit_to_width = False
-        self.zoom /= 1.25
-        print(f"Zoom Out → {self.zoom:.2f}")
+        self.user_scale /= 1.85
+        print(f"Zoom Out → user_scale={self.user_scale:.3f}")
         self.update_scaled_image()
 
     def reset_zoom(self):
         """Fit to window width."""
         self.fit_to_width = True
+        # update_scaled_image will compute user_scale based on viewport width
         self.update_scaled_image()
         print("Fit-to-width mode enabled")
 
