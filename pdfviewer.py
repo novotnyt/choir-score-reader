@@ -1,5 +1,6 @@
 import sys
 import json
+import os
 import fitz  # PyMuPDF
 from PyQt5.QtWidgets import (
     QApplication, QLabel, QScrollArea, QMainWindow, QFileDialog, QToolBar, QAction
@@ -11,18 +12,21 @@ from PyQt5.QtCore import Qt, QTimer
 class PDFViewer(QMainWindow):
     def __init__(self, pdf_path):
         super().__init__()
-        self.setWindowTitle("Smooth PDF Viewer – Anchors, Zoom, Width Fit")
+        self.setWindowTitle(f"Smooth PDF Viewer – {os.path.basename(pdf_path)}")
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
 
-        # PDF rendering data
+        # store PDF info
+        self.pdf_path = pdf_path
+        self.anchor_path = self._make_anchor_filename(pdf_path)
         self.doc = fitz.open(pdf_path)
-        self.zoom = 1.0  # current zoom multiplier
-        self.fit_to_width = True
 
-        # Anchors + navigation
+        self.zoom = 1.0
+        self.fit_to_width = True
+        self.performance_mode = False
         self.anchors = []
         self.current_anchor_index = -1
+
 
         # Render base image (full resolution)
         self.base_image = self.render_pdf_to_long_image(self.doc)
@@ -51,8 +55,16 @@ class PDFViewer(QMainWindow):
         self.timer.timeout.connect(self.smooth_scroll)
         self.target_y = 0
 
+        # Load anchors automatically if available
+        self.load_anchors()
+
         # Draw anchors
         self.update_pixmap()
+
+
+    def _make_anchor_filename(self, pdf_path):
+        base = os.path.splitext(os.path.basename(pdf_path))[0]
+        return f"anchors_{base}.json"
 
     # ---------- PDF Rendering ----------
     def render_pdf_to_long_image(self, doc):
@@ -256,22 +268,22 @@ class PDFViewer(QMainWindow):
 
     # ---------- Save/Load ----------
     def save_anchors(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Anchors", "", "JSON Files (*.json)")
-        if not path:
-            return
-        with open(path, "w") as f:
+        """Save anchors automatically to anchors_<pdfname>.json."""
+        with open(self.anchor_path, "w") as f:
             json.dump(self.anchors, f, indent=2)
-        print(f"Anchors saved to {path}")
+        print(f"💾 Anchors saved to {self.anchor_path}")
 
     def load_anchors(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load Anchors", "", "JSON Files (*.json)")
-        if not path:
+        """Load anchors automatically from anchors_<pdfname>.json, if exists."""
+        if not os.path.exists(self.anchor_path):
+            print(f"(no anchors file found for {self.pdf_path})")
             return
-        with open(path, "r") as f:
+        with open(self.anchor_path, "r") as f:
             self.anchors = json.load(f)
         self.current_anchor_index = -1
-        print(f"Loaded {len(self.anchors)} anchors from {path}")
+        print(f"📂 Loaded {len(self.anchors)} anchors from {self.anchor_path}")
         self.update_pixmap()
+
 
     # ---------- Performance Mode ----------
     def enter_performance_mode(self):
@@ -317,7 +329,18 @@ class ClickableLabel(QLabel):
         self.parent_viewer.keyPressEvent(event)
 
 if __name__ == "__main__":
+    import sys
     app = QApplication(sys.argv)
-    viewer = PDFViewer("example.pdf")  # 👈 Replace with your PDF
+
+    if len(sys.argv) < 2:
+        print("Usage: python pdf_viewer.py <file.pdf>")
+        sys.exit(1)
+
+    pdf_file = sys.argv[1]
+    if not os.path.exists(pdf_file):
+        print(f"File not found: {pdf_file}")
+        sys.exit(1)
+
+    viewer = PDFViewer(pdf_file)
     viewer.showMaximized()
     sys.exit(app.exec_())
