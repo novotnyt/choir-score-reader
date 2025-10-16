@@ -152,10 +152,18 @@ class PDFViewer(QMainWindow):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Right:
-            self.next_anchor()
-        elif key == Qt.Key_Left:
-            self.prev_anchor()
+
+        # Performance mode: only ESC works
+        if getattr(self, "performance_mode", False):
+            if key == Qt.Key_Escape:
+                self.exit_performance_mode()
+            elif key == Qt.Key_Right:
+                self.next_anchor()
+            elif key == Qt.Key_Left:
+                self.prev_anchor()
+            return
+
+        # --- Normal mode controls ---
         elif key == Qt.Key_S:
             self.save_anchors()
         elif key == Qt.Key_L:
@@ -164,12 +172,24 @@ class PDFViewer(QMainWindow):
             self.zoom_in()
         elif key == Qt.Key_Minus:
             self.zoom_out()
+        elif key == Qt.Key_Return or key == Qt.Key_Enter:
+            self.add_anchor_at_view_top()
         elif key == Qt.Key_F:
             self.enter_performance_mode()
-        elif key == Qt.Key_Escape:
-            if getattr(self, "performance_mode", False):
-                self.exit_performance_mode()
 
+
+    def add_anchor_at_view_top(self):
+        """Add an anchor corresponding to the current top of the visible area."""
+        if getattr(self, "performance_mode", False):
+            return  # disabled in performance mode
+
+        sb = self.scroll_area.verticalScrollBar()
+        y_top_scaled = sb.value()  # top of the viewport in scaled coordinates
+        y_abs = y_top_scaled / self.zoom  # convert to base-image coordinate
+        self.anchors.append(y_abs)
+        self.anchors = sorted(list(set(self.anchors)))
+        print(f"Added anchor at top of view (base-y={y_abs:.1f})")
+        self.update_pixmap()
 
     def next_anchor(self):
         if not self.anchors:
@@ -255,34 +275,38 @@ class PDFViewer(QMainWindow):
 
     # ---------- Performance Mode ----------
     def enter_performance_mode(self):
-        """Hide anchors and toolbar, go fullscreen."""
+        """Hide anchors and toolbar, disable interactions, go fullscreen."""
         self.performance_mode = True
         self.showFullScreen()
         if hasattr(self, "toolbar"):
             self.toolbar.setVisible(False)
-        self.update_pixmap()  # redraw without anchors
+        self.update_pixmap()
         print("🎬 Entered Performance Mode (press ESC to exit)")
 
     def exit_performance_mode(self):
-        """Show anchors and toolbar again."""
+        """Restore normal interactive mode."""
         self.performance_mode = False
         self.showMaximized()
         if hasattr(self, "toolbar"):
             self.toolbar.setVisible(True)
         self.update_pixmap()
-        print("⬅️  Exited Performance Mode")
+        print("⬅️ Exited Performance Mode")
+
 
 
 
 
 class ClickableLabel(QLabel):
-    """Clickable PDF image that handles mouse and key events."""
     def __init__(self, parent_viewer):
         super().__init__()
         self.parent_viewer = parent_viewer
         self.setFocusPolicy(Qt.StrongFocus)
 
     def mousePressEvent(self, event):
+        if getattr(self.parent_viewer, "performance_mode", False):
+            # Ignore all clicks in performance mode
+            return
+
         if event.button() == Qt.LeftButton:
             self.parent_viewer.add_anchor(event.pos().y())
         elif event.button() == Qt.RightButton:
@@ -291,7 +315,6 @@ class ClickableLabel(QLabel):
 
     def keyPressEvent(self, event):
         self.parent_viewer.keyPressEvent(event)
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
