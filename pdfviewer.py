@@ -235,33 +235,33 @@ class PDFViewer(QMainWindow):
         if getattr(self, "performance_mode", False):
             if key == Qt.Key_Escape:
                 self.exit_performance_mode()
-            elif key == Qt.Key_Right:
+            elif key == Qt.Key_Right or key == Qt.Key_PageDown:
                 self.next_anchor()
-            elif key == Qt.Key_Left:
+            elif key == Qt.Key_Left or key == Qt.Key_PageUp:
                 self.prev_anchor()
-            elif key == Qt.Key_Plus or key == Qt.Key_Equal:
+            elif key == Qt.Key_Plus or key == Qt.Key_Equal or key == Qt.Key_P:
                 self.zoom_in()
-            elif key == Qt.Key_Minus:
+            elif key == Qt.Key_Minus or key == Qt.Key_M:
                 self.zoom_out()
             return
 
         # --- Normal mode controls ---
         elif key == Qt.Key_S:
             self.save_anchors()
-        elif key == Qt.Key_L:
-            self.load_anchors()
-        elif key == Qt.Key_Right:
+        elif key == Qt.Key_Right or key == Qt.Key_PageDown:
             self.next_anchor()
-        elif key == Qt.Key_Left:
+        elif key == Qt.Key_Left or key == Qt.Key_PageUp:
             self.prev_anchor()
-        elif key == Qt.Key_Plus or key == Qt.Key_Equal:
+        elif key == Qt.Key_Plus or key == Qt.Key_Equal or key == Qt.Key_P:
             self.zoom_in()
-        elif key == Qt.Key_Minus:
+        elif key == Qt.Key_Minus or key == Qt.Key_M:
             self.zoom_out()
         elif key == Qt.Key_Return or key == Qt.Key_Enter:
             self.add_anchor_at_view_top()
         elif key == Qt.Key_F:
             self.enter_performance_mode()
+        elif key == Qt.Key_Escape:
+            sys.exit()
 
 
     def add_anchor_at_view_top(self):
