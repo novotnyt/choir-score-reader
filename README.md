@@ -1,6 +1,6 @@
 ## Choir score reader
 
-A Ubuntu PDF viewer written almost entirely by ChatGPT.
+A PDF viewer written almost entirely by ChatGPT. Only tested on Ubuntu 24.04.
 
 Open a pdf file and set anchor points by clicking or pressing `<ENTER>`. These anchor points represent
 the top line of a screen. Save your anchor points by pressing `<S>`.
